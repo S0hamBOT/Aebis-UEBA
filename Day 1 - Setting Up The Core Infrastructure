@@ -1,0 +1,292 @@
+# Day 1 - Setting Up The Core Infrastructure: Complete ELK Stack Installation Guide
+
+Today, we'll be setting up the ELK Stack (Elasticsearch, Logstash, and Kibana) on Ubuntu 18.04. This powerful combination will serve as the foundation for collecting, processing, and visualizing your application logs.
+
+## What is the ELK Stack?
+
+Refer to Day 0 - Understanding ELK Stack, but anyways;
+
+The ELK Stack consists of three main components:
+- **Elasticsearch**: A distributed search and analytics engine
+- **Logstash**: A data processing pipeline that ingests data from multiple sources
+- **Kibana**: A data visualization and exploration tool
+
+## Prerequisites
+
+Before we begin, ensure you have:
+- Ubuntu 18.04 server with sudo privileges
+- At least 2GB of available memory
+- Apache web server (we'll reference the setup guide)
+- Internet connection for downloading packages
+
+## Step 1: System Preparation
+
+First, let's update our system to ensure we have the latest packages:
+
+```bash
+sudo apt-get update && sudo apt-get upgrade
+```
+
+Since Logstash requires Java to be present on the system (while Elasticsearch bundles its own Java runtime), we need to install Java:
+
+```bash
+sudo apt-get install default-jre-headless
+```
+
+> **Note**: We're installing the headless version since we don't need the GUI components for our server setup.
+
+## Step 2: Configure Apache Web Server
+
+Before proceeding with the ELK installation, make sure Apache is properly configured on your server. Follow the Apache Web Server on Ubuntu 18.04 guide to set up and configure Apache.
+
+## Step 3: Install the Elastic Stack Repository
+
+The Elastic package repositories contain all the necessary packages for our tutorial. Let's add them to our system.
+
+### Add the Official Elastic APT Package Signing Key
+
+```bash
+wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+```
+
+### Add the APT Repository
+
+```bash
+echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-7.x.list
+```
+
+### Refresh Package List
+
+```bash
+sudo apt-get update
+```
+
+## Step 4: Install and Configure Elasticsearch
+
+### Install Elasticsearch
+
+```bash
+sudo apt-get install elasticsearch
+```
+
+### Configure JVM Heap Size
+
+For optimal performance, set the JVM heap size to approximately one-quarter of your server's available memory. For a 2GB server, edit the JVM options:
+
+```bash
+sudo nano /etc/elasticsearch/jvm.options
+```
+
+Find and uncomment these lines, then modify the values:
+
+```
+-Xms512m
+-Xmx512m
+```
+
+> **Important**: The default commented values are `-Xms4g` and `-Xmx4g`. Make sure to uncomment by removing the `##` symbols.
+
+### Start and Enable Elasticsearch
+
+```bash
+sudo systemctl enable elasticsearch
+sudo systemctl start elasticsearch
+```
+
+### Verify Elasticsearch Installation
+
+Wait a few moments for the service to start, then test the API:
+
+```bash
+curl localhost:9200
+```
+
+You should receive a JSON response similar to:
+
+```json
+{
+  "name" : "localhost",
+  "cluster_name" : "elasticsearch",
+  "cluster_uuid" : "tTuwONK4QMW918XkF9VecQ",
+  "version" : {
+    "number" : "7.11.1",
+    "build_flavor" : "default",
+    "build_type" : "deb",
+    "build_hash" : "ff17057114c2199c9c1bbecc727003a907c0db7a",
+    "build_date" : "2021-02-15T13:44:09.394032Z",
+    "build_snapshot" : false,
+    "lucene_version" : "8.7.0",
+    "minimum_wire_compatibility_version" : "6.8.0",
+    "minimum_index_compatibility_version" : "6.0.0-beta1"
+  },
+  "tagline" : "You Know, for Search"
+}
+```
+
+> **Troubleshooting**: If Elasticsearch doesn't respond immediately, use `systemctl status elasticsearch` to check the service status and logs.
+
+## Step 5: Optimize Elasticsearch for Single Server Setup
+
+Since we're running on a single server, we can optimize Elasticsearch by reducing unnecessary overhead from multiple shards and replicas.
+
+### Create Index Template
+
+Create a temporary JSON file for the index template:
+
+```bash
+nano ~/template.json
+```
+
+Add the following content:
+
+```json
+{
+  "index_patterns": ["*"],
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0
+      }
+    }
+  }
+}
+```
+
+### Apply the Template
+
+```bash
+curl -XPUT -H'Content-type: application/json' http://localhost:9200/_index_template/defaults -d @template.json
+```
+
+Expected response: `{"acknowledged":true}`
+
+## Step 6: Install and Configure Logstash
+
+### Install Logstash
+
+```bash
+sudo apt-get install logstash
+```
+
+### Configure JVM Heap Size
+
+Similar to Elasticsearch, configure Logstash's JVM heap size:
+
+```bash
+sudo nano /etc/logstash/jvm.options
+```
+
+Set the values for a 2GB server:
+
+```
+-Xms512m
+-Xmx512m
+```
+
+### Create Logstash Configuration for Apache Logs
+
+Create the Apache log processing configuration:
+
+```bash
+sudo nano /etc/logstash/conf.d/apache.conf
+```
+
+Add the following configuration:
+
+```
+input {
+  file {
+    path => '/var/www/*/logs/access.log'
+    start_position => 'beginning'
+  }
+}
+
+filter {
+  grok {
+    match => { "message" => "%{COMBINEDAPACHELOG}" }
+  }
+}
+
+output {
+  elasticsearch { }
+}
+```
+
+> **Important**: This configuration assumes Apache logs are stored in `/var/www/*/logs/access.log`. Adjust the path if your logs are stored elsewhere.
+
+### Start and Enable Logstash
+
+```bash
+sudo systemctl enable logstash
+sudo systemctl start logstash
+```
+
+## Step 7: Install and Configure Kibana
+
+### Install Kibana
+
+```bash
+sudo apt-get install kibana
+```
+
+### Start and Enable Kibana
+
+```bash
+sudo systemctl enable kibana
+sudo systemctl start kibana
+```
+
+## Step 8: Generate Test Data and Access Kibana
+
+### Generate Apache Access Logs
+
+To create some test data for Kibana, generate several requests to Apache:
+
+```bash
+for i in `seq 1 5` ; do curl localhost ; sleep 0.2 ; done
+```
+
+### Access Kibana via SSH Port Forwarding
+
+Since Kibana binds to localhost (127.0.0.1) by default for security, use SSH port forwarding to access it from your local machine:
+
+```bash
+ssh -N -L 5601:localhost:5601 <your-server-ip-address>
+```
+
+> **Note**: Run this command on your local computer, not the server. Keep it running during your Kibana session.
+
+### Open Kibana in Your Browser
+
+Navigate to `http://localhost:5601` in your browser. You should see the Kibana landing page. Click on "Explore on my own" to begin configuring your dashboards.
+
+## What's Next?
+
+Congratulations! You've successfully set up the core ELK Stack infrastructure. In the upcoming posts, we'll cover:
+
+- Day 2: Configuring index patterns and creating your first visualizations
+- Day 3: Setting up advanced log parsing and filters
+- Day 4: Creating comprehensive dashboards
+- Day 5: Implementing alerting and monitoring
+
+## Key Takeaways
+
+- The ELK Stack provides a powerful foundation for log management and analysis
+- Proper JVM heap sizing is crucial for performance (¼ of available RAM)
+- Single-server setups benefit from reduced shards and replicas
+- SSH port forwarding provides secure access to Kibana's web interface
+- Always verify each component is running before proceeding to the next
+
+## Troubleshooting Tips
+
+- Use `systemctl status <service-name>` to check service status
+- Check logs with `journalctl -u <service-name>` for detailed error messages
+- Ensure sufficient memory allocation for all three services
+- Verify network connectivity between components
+
+Ready to dive deeper into the world of log analytics? Stay tuned for Day 2 where we'll start creating meaningful visualizations from your data!
+
+---
+
+*Have questions or run into issues? Drop a comment below, and I'll help you troubleshoot your ELK Stack setup.*
